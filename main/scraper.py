@@ -24,6 +24,7 @@ def extract_coordinates_from_url(url: str):
     
 
 def scrape_google_maps(search_for: str,user_id, total: int = 25):
+    print(search_for,"LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL")
     business_list = []
 
     with sync_playwright() as p:
@@ -34,15 +35,61 @@ def scrape_google_maps(search_for: str,user_id, total: int = 25):
 
         try:
             print("[INFO] Navigating to Google Maps...")
-            page.goto("https://www.google.com/maps", wait_until="domcontentloaded", timeout=120000)
-            page.wait_for_selector('//input[@id="searchboxinput"]', timeout=15000)
+            page.goto("https://www.google.com/maps?hl=en", wait_until="domcontentloaded", timeout=60000)
 
-            print(f"[INFO] Searching for: {search_for}")
-            search_box = page.locator('//input[@id="searchboxinput"]')
-            search_box.fill(search_for)
-            page.keyboard.press("Enter")
+            # 1. AGGRESSIVE COOKIE HANDLING
+            # Sometimes it's a 'Before you continue' page, sometimes a popup.
+            try:
+                # Look for ANY button that looks like an 'Accept' button
+                selectors = [
+                    "button:has-text('Accept all')", 
+                    "button:has-text('I agree')",
+                    "button:has-text('Agree')",
+                    "//form//button[contains(., 'Accept')]"
+                ]
+                for selector in selectors:
+                    btn = page.locator(selector).first
+                    if btn.is_visible(timeout=3000):
+                        print(f"[INFO] Clicking consent: {selector}")
+                        btn.click()
+                        page.wait_for_load_state("networkidle")
+                        break
+            except:
+                pass
 
-            page.wait_for_selector('//a[contains(@href, "/place/")]', timeout=20000)
+            # 2. MULTI-SELECTOR SEARCH BOX (Resilience)
+            # We try the standard ID, the name attribute, and the CSS class
+            print("[INFO] Waiting for search box...")
+            search_selectors = [
+                "#searchboxinput", 
+                "input[name='q']", 
+                "input.searchboxinput",
+                "input.fontBodyMedium"
+            ]
+            
+            search_box = None
+            for selector in search_selectors:
+                try:
+                    # If this succeeds, search_box becomes a valid pointer to that element
+                    if page.wait_for_selector(selector, timeout=5000):
+                        search_box = page.locator(selector)
+                        print(f"[INFO] Found search box with: {selector}")
+                        break
+                except:
+                    continue
+
+            if search_box:
+                # IMPORTANT: Use the 'search_box' variable directly!
+                # Do NOT use page.locator('//input[@id="searchboxinput"]') here.
+                search_box.fill(search_for) 
+                search_box.press("Enter")
+                print(f"[INFO] Search submitted for: {search_for}")
+            else:
+                raise Exception("Search box not found with any known selector")
+
+            # Now wait for the results container (the "feed")
+            # In the version of Maps where name='q' is used, results might be in a different container
+            page.wait_for_selector('div[role="feed"], [aria-label*="Results for"]', timeout=30000)
             time.sleep(3)
 
             print("[INFO] Scrolling sidebar to load listings...")
